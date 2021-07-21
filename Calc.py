@@ -1,11 +1,10 @@
-stop = False
 variable = {}  # 변수와 그 값
 calculator = ('+', '-', '*', '/')  # 연산자
-while not stop:
+while True:
     # 반복해서 입력을 받음
     enter = input()
 
-    # 입력문구를 가지고 다른 기능 수행
+    # 입력문구에 따라 다른 기능 수행
     if enter.lower() == 'quit':  # 'quit'을 입력 시
         exit()  # 프로그램 종료
     # '='가 2개 이상 있을 시
