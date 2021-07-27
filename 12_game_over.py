@@ -1,20 +1,25 @@
 import pygame
-import os, random, math
+import os, random, math, time
 
 # 버블 클래스 생성
 class Bubble(pygame.sprite.Sprite):
-    def __init__(self, image, color, position=(0,0)):
+    def __init__(self, image, color, position=(0,0), row_idx=-1, col_idx=-1):
         super().__init__()
         self.image = image
         self.color = color
         self.rect = image.get_rect(center=position)
         self.radius = 16
+        self.row_idx = row_idx
+        self.col_idx = col_idx
 
     def set_rect(self, position):
         self.rect = self.image.get_rect(center=position)
 
-    def draw(self, screen):
-        screen.blit(self.image, self.rect)
+    def draw(self, screen, to_x=None):
+        if to_x:
+            screen.blit(self.image, (self.rect.x + to_x, self.rect.y))
+        else:
+            screen.blit(self.image, self.rect)
 
     def set_angle(self, angle):
         self.angle = angle
@@ -28,6 +33,13 @@ class Bubble(pygame.sprite.Sprite):
 
         if (self.rect.left < 0) or (self.rect.right > screen_width):
             self.set_angle(180 - self.angle)
+    
+    def set_map_index(self, row_idx, col_idx):
+        self.row_idx = row_idx
+        self.col_idx = col_idx
+
+    def drop_downward(self, height):
+        self.rect = self.image.get_rect(center=(self.rect.centerx, self.rect.centery + height))
 
 # 발사대 클래스 생성
 class Pointer(pygame.sprite.Sprite):
@@ -61,7 +73,7 @@ def setup():
         list('RRYYBBG/'),  # / : 버블이 위치할 수 없다.
         list('BBGGRRYY'),
         list('BGGRRYY/'),
-        list('........'),  # . : 비어있는 곳
+        list('PPYYBBGG'),  # . : 비어있는 곳
         list('......./'),
         list('........'),
         list('......./'),
@@ -76,12 +88,12 @@ def setup():
                 continue
             position = get_bubble_position(row_idx, col_idx)
             image = get_bubble_image(col)
-            bubble_group.add(Bubble(image, col, position))
+            bubble_group.add(Bubble(image, col, position, row_idx, col_idx))
 
 def get_bubble_position(row_idx, col_idx):
     global cell_size
     pos_x = col_idx * cell_size + (bubble_width // 2)
-    pos_y = row_idx * cell_size + (bubble_height // 2)
+    pos_y = row_idx * cell_size + (bubble_height // 2) + wall_height
     if row_idx % 2 == 1:
         pos_x += cell_size // 2
     return pos_x, pos_y
@@ -126,16 +138,18 @@ def get_random_bubble_color():
     return random.choice(colors)
 
 def process_collision():
-    global current_bubble, fire
+    global current_bubble, fire, current_fire_count
     hit_bubble = pygame.sprite.spritecollideany(current_bubble, bubble_group, pygame.sprite.collide_mask)
-    if hit_bubble or current_bubble.rect.top <= 0:
+    if hit_bubble or current_bubble.rect.top <= wall_height:
         row_idx, col_idx = get_map_index(*current_bubble.rect.center)
         place_bubble(current_bubble, row_idx, col_idx)
+        remove_adjacent_bubbles(row_idx, col_idx, current_bubble.color)
         current_bubble = None
         fire = False
+        current_fire_count -= 1
 
 def get_map_index(x, y):
-    row_idx = y // cell_size
+    row_idx = (y - wall_height) // cell_size
     if row_idx % 2 == 1:
         col_idx = (x - (cell_size // 2)) // cell_size
         if col_idx < 0:
@@ -150,7 +164,98 @@ def place_bubble(bubble, row_idx, col_idx):
     map[row_idx][col_idx] = bubble.color
     position = get_bubble_position(row_idx, col_idx)
     bubble.set_rect(position)
+    bubble.set_map_index(row_idx, col_idx)
     bubble_group.add(bubble)
+
+def remove_adjacent_bubbles(row_idx, col_idx, color):
+    global visited
+    visited.clear()
+    visit(row_idx, col_idx, color)
+    if len(visited) >= 3:
+        remove_visited_bubbles()
+        remove_hanging_bubbles()
+
+def visit(row_idx, col_idx, color=None):
+    global visited
+    # 맵 범위 벗어나는지 확인
+    if (row_idx < 0) or (row_idx >= map_row_count) or (col_idx < 0) or (col_idx >= map_column_count):
+        return
+    # 현재 셀의 색상이 color와 같은지
+    if color and (map[row_idx][col_idx] != color):
+        return
+    # 빈공간이거나 버블이 존재할수 없는 곳인지 확인
+    if map[row_idx][col_idx] in './':
+        return
+    if (row_idx, col_idx) in visited:
+        return
+    # 방문처리
+    visited.append((row_idx, col_idx))
+    
+    if row_idx % 2 == 1:
+        rows = [0, -1, -1, 0, 1, 1]
+        cols = [-1, 0, 1, 1, 1, 0]
+    else:
+        rows = [0, -1, -1, -0, 1, 1]
+        cols = [-1, -1, 0, 1, 0, -1]
+
+    for i in range(len(rows)):
+        visit(row_idx + rows[i], col_idx + cols[i], color)
+
+def remove_visited_bubbles():
+    global visited, bubble_group
+    bubbles_to_remove = [b for b in bubble_group if (b.row_idx, b.col_idx) in visited]
+    for bubble in bubbles_to_remove:
+        map[bubble.row_idx][bubble.col_idx] = "."
+        bubble_group.remove(bubble)
+
+def remove_not_visited_bubbles():
+    global visited, bubble_group
+    bubbles_to_remove = [b for b in bubble_group if (b.row_idx, b.col_idx) not in visited]
+    for bubble in bubbles_to_remove:
+        map[bubble.row_idx][bubble.col_idx] = "."
+        bubble_group.remove(bubble)
+
+def remove_hanging_bubbles():
+    global visited
+    visited.clear()
+    for col_idx in range(map_column_count):
+        if map[0][col_idx] != '.':
+            visit(0, col_idx)
+    remove_not_visited_bubbles()
+
+def draw_bubbles():
+    global current_fire_count, bubble_group
+    to_x = None
+    if current_fire_count == 2:
+        to_x = random.randint(0, 2) - 1  # -1 ~ 1
+    elif current_fire_count == 1:
+        to_x = random.randint(0, 8) - 4  # -4 ~ 4
+    
+    for bubble in bubble_group:
+        bubble.draw(screen, to_x)
+
+def drop_wall():
+    global wall_height, bubble_group, current_fire_count, fire_count
+    wall_height += cell_size
+    for bubble in bubble_group:
+        bubble.drop_downward(cell_size)
+    current_fire_count = fire_count
+
+def get_lowest_bubble_bottom():
+    global bubble_group
+    bubble_bottoms = [bubble.rect.bottom for bubble in bubble_group]
+    return max(bubble_bottoms)
+
+def change_bubble_image(image):
+    global bubble_group
+    for bubble in bubble_group:
+        bubble.image = image
+
+def display_game_over():
+    global game_font
+    txt_game_over = game_font.render(game_result, True, white)
+    rect_game_over = txt_game_over.get_rect(center=(screen_width // 2, screen_height // 2))
+    screen.blit(txt_game_over, rect_game_over)
 
 # 기본설정
 pygame.init()
@@ -163,6 +268,7 @@ clock = pygame.time.Clock()
 # 배경 만들기
 current_path = os.path.dirname(__file__)
 background = pygame.image.load(os.path.join(current_path, 'background.png'))
+wall = pygame.image.load(os.path.join(current_path, 'wall.png'))  # 벽 이미지
 
 # 버블 만들기
 bubble_images = [
@@ -189,10 +295,20 @@ to_angle_right = 0
 angle_speed = 1.5
 map_row_count = 11
 map_column_count = 8
+visited = []  # 방문위치기록
+fire_count = 7
+red = (255, 0, 0)
+white = (255, 255, 255)
 
 current_bubble = None  # 이번에 쏠 버블
 next_bubble = None  # 다음에 쏠 버블
 fire = False  # 발사 여부
+current_fire_count = fire_count
+wall_height = 0  # 화면에 보여지는 벽의 높이
+
+is_game_over = False
+game_font = pygame.font.SysFont('arialrounded', 40)
+gmae_result = None
 
 setup()
 
@@ -225,10 +341,22 @@ while running:
 
     if fire:
         process_collision()  # 충돌 처리
+
+    if current_fire_count == 0:
+        drop_wall()
+
+    if not bubble_group:
+        game_result = 'Mission Complete'
+        is_game_over = True
+    elif get_lowest_bubble_bottom() > len(map) * cell_size:
+        game_result = 'Game Over'
+        is_game_over = True
+        change_bubble_image(bubble_images[-1])
     
     # 오브젝트 그리기
     screen.blit(background, (0, 0))  # 배경
-    bubble_group.draw(screen)
+    screen.blit(wall, (0, wall_height - screen_height))
+    draw_bubbles()
     pointer.rotate(to_angle_left + to_angle_right)
     pointer.draw(screen)
     if current_bubble:
@@ -238,8 +366,14 @@ while running:
         
     if next_bubble:
         next_bubble.draw(screen)
+    
+    if is_game_over:
+        display_game_over()
+        running = False
 
     # 화면 업데이트
     pygame.display.update()
+
+pygame.time.delay(1200)
 
 pygame.quit()
